@@ -57,7 +57,10 @@ npm start
   "mcpServers": {
     "hyperbolic-gpu": {
       "command": "node",
-      "args": ["/path/to/hyperbolic-mcp-server/build/index.js"]
+      "args": ["/path/to/hyperbolic-mcp-server/build/index.js"],
+      "env": {
+        "HYPERBOLIC_API_TOKEN": "your-hyperbolic-api-token"
+      }
     }
   }
 }

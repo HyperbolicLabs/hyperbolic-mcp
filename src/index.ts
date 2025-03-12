@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import dotenv from "dotenv";
+import { sshManager } from "./ssh-manager.js";
 
 // Load environment variables
 dotenv.config();
@@ -110,8 +111,6 @@ server.tool(
 
           // Get price information
           const pricePerHour = instance.pricing?.price?.amount || 0;
-          // Convert cents to dollars
-          const pricePerHourDollars = (pricePerHour / 100).toFixed(2);
 
           return {
             cluster_name: instance.cluster_name || "unknown",
@@ -125,7 +124,7 @@ server.tool(
             cpu_cores: instance.hardware?.cpus?.[0]?.virtual_cores || "Unknown",
             ram_gb: totalRAM,
             storage_gb: totalStorage,
-            price_per_hour: `$${pricePerHourDollars}`,
+            price_per_hour: `${pricePerHour}`,
             reserved: instance.reserved ? "Yes" : "No",
             region: instance.location?.region || "Unknown",
           };
@@ -145,7 +144,7 @@ server.tool(
       }
 
       // Create a more human-readable table format
-      const tableHeader = `| Cluster Name | Node Name | GPU Model | Available/Total GPUs | VRAM (GB) | CPU Cores | RAM (GB) | Storage (GB) | Price/Hour ($) | Region |\n| ----------- | --------- | --------- | ------------------ | --------- | --------- | ------- | ----------- | ------------- | ------ |`;
+      const tableHeader = `| Cluster Name | Node Name | GPU Model | Available/Total GPUs | VRAM (GB) | CPU Cores | RAM (GB) | Storage (GB) | Price/Hour | Region |\n| ----------- | --------- | --------- | ------------------ | --------- | --------- | ------- | ----------- | ---------- | ------ |`;
 
       const tableRows = availableGPUs.map(
         (gpu: {
@@ -204,6 +203,54 @@ server.tool(
   },
   async ({ cluster_name, node_name, gpu_count }) => {
     try {
+      // First, verify that the cluster exists and has available GPUs
+      const marketplaceData = await makeHyperbolicRequest(
+        "/marketplace",
+        "POST",
+        { filters: {} }
+      );
+
+      if (
+        !marketplaceData.instances ||
+        !Array.isArray(marketplaceData.instances)
+      ) {
+        throw new Error("Invalid response format from Hyperbolic API");
+      }
+
+      // Find the specified cluster
+      const instance = marketplaceData.instances.find(
+        (i: any) => i.cluster_name === cluster_name && i.id === node_name
+      );
+
+      if (!instance) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error: The specified cluster (${cluster_name}) or node (${node_name}) was not found. Please check the names and try again.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Check if the instance is available
+      const availableGPUCount =
+        (instance.gpus_total || 0) - (instance.gpus_reserved || 0);
+
+      if (availableGPUCount < gpu_count) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error: The requested number of GPUs (${gpu_count}) exceeds the available GPUs (${availableGPUCount}) on this cluster.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // If validation passes, proceed with the rental
       const requestBody = {
         cluster_name,
         node_name,
@@ -216,15 +263,46 @@ server.tool(
         requestBody
       );
 
+      // Format the response in a more readable way
+      const formattedResponse = `# GPU Instance Successfully Rented!
+
+## Rental Details
+- Cluster Name: ${cluster_name}
+- Node Name: ${node_name}
+- GPUs Rented: ${gpu_count}
+- Instance ID: ${data.instance_id || "N/A"}
+- Status: ${data.status || "Created"}
+
+## Hardware Details
+- GPU Model: ${instance.hardware?.gpus?.[0]?.model || "Unknown"}
+- GPU VRAM: ${
+        instance.hardware?.gpus?.[0]?.ram
+          ? formatRAM(instance.hardware.gpus[0].ram)
+          : "Unknown"
+      }
+- CPU: ${instance.hardware?.cpus?.[0]?.model || "Unknown"} (${
+        instance.hardware?.cpus?.[0]?.virtual_cores || "Unknown"
+      } virtual cores)
+
+## Pricing
+- Cost: ${instance.pricing?.price?.amount || "Unknown"} per ${
+        instance.pricing?.price?.period || "hour"
+      }
+
+## Connection Information
+${
+  data.connection_info
+    ? JSON.stringify(data.connection_info, null, 2)
+    : "Connection information will be available shortly."
+}
+
+Your GPU instance is now being provisioned and will be ready shortly. You can check the status of your instance through the Hyperbolic dashboard.`;
+
       return {
         content: [
           {
             type: "text",
-            text: `Successfully rented GPU instance!\n\nDetails:\n${JSON.stringify(
-              data,
-              null,
-              2
-            )}`,
+            text: formattedResponse,
           },
         ],
       };
@@ -303,10 +381,10 @@ server.tool(
         ? `${instance.hardware.storage[0].capacity || 0} GB`
         : "No storage information available";
 
-      const priceCents = instance.pricing?.price?.amount || 0;
-      const priceDollars = (priceCents / 100).toFixed(2);
       const pricing = instance.pricing?.price
-        ? `$${priceDollars} per ${instance.pricing.price.period || "hour"}`
+        ? `${instance.pricing.price.amount || 0} per ${
+            instance.pricing.price.period || "hour"
+          }`
         : "Pricing information not available";
 
       const availableGPUCount =
@@ -388,6 +466,175 @@ To rent GPUs from this cluster, use the \`rent-gpu-instance\` tool with the foll
     }
   }
 );
+
+// Register SSH connection tool
+server.tool(
+  "ssh-connect",
+  {
+    host: z.string().describe("Hostname or IP address of the remote server"),
+    username: z.string().describe("SSH username for authentication"),
+    password: z
+      .string()
+      .optional()
+      .describe("SSH password for authentication (optional if using key)"),
+    private_key_path: z
+      .string()
+      .optional()
+      .describe(
+        "Path to private key file (optional, uses SSH_PRIVATE_KEY_PATH from environment if not provided)"
+      ),
+    port: z
+      .number()
+      .int()
+      .min(1)
+      .max(65535)
+      .default(22)
+      .describe("SSH port number (default: 22)"),
+  },
+  async ({ host, username, password, private_key_path, port }) => {
+    try {
+      const result = await sshManager.connect(
+        host,
+        username,
+        password,
+        private_key_path,
+        port
+      );
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: result,
+          },
+        ],
+        isError:
+          result.startsWith("SSH Connection Error") ||
+          result.startsWith("SSH Key Error"),
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error connecting to SSH: ${(error as Error).message}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Register SSH command execution tool
+server.tool(
+  "remote-shell",
+  {
+    command: z.string().describe("Command to execute on the remote server"),
+  },
+  async ({ command }) => {
+    try {
+      if (!sshManager.isConnected()) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Error: No active SSH connection. Please connect first using the ssh-connect tool.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const result = await sshManager.execute(command);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: result || "(Command executed with no output)",
+          },
+        ],
+        isError:
+          result.startsWith("Error:") ||
+          result.startsWith("SSH Command Error:"),
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error executing command: ${(error as Error).message}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Register SSH status tool
+server.tool("ssh-status", {}, async () => {
+  try {
+    const status = sshManager.getConnectionInfo();
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `SSH Connection Status: ${status}`,
+        },
+      ],
+    };
+  } catch (error) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Error getting SSH status: ${(error as Error).message}`,
+        },
+      ],
+      isError: true,
+    };
+  }
+});
+
+// Register SSH disconnect tool
+server.tool("ssh-disconnect", {}, async () => {
+  try {
+    if (!sshManager.isConnected()) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "No active SSH connection to disconnect.",
+          },
+        ],
+      };
+    }
+
+    await sshManager.disconnect();
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: "SSH connection closed successfully.",
+        },
+      ],
+    };
+  } catch (error) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Error disconnecting SSH: ${(error as Error).message}`,
+        },
+      ],
+      isError: true,
+    };
+  }
+});
 
 // Start the server
 async function main() {

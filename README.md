@@ -74,13 +74,15 @@ npm start
 
 The server provides the following tools:
 
-### list-available-gpus
+### GPU Management Tools
+
+#### list-available-gpus
 
 Lists all available GPUs on the Hyperbolic network.
 
 Example query: "Show me all available GPUs on Hyperbolic."
 
-### rent-gpu-instance
+#### rent-gpu-instance
 
 Rents a GPU instance from a specific cluster.
 
@@ -92,7 +94,7 @@ Parameters:
 
 Example query: "I want to rent 4 GPUs from the extrasmall-chamomile-duck cluster."
 
-### get-cluster-details
+#### get-cluster-details
 
 Gets detailed information about a specific cluster.
 
@@ -101,6 +103,44 @@ Parameters:
 - `cluster_name`: The name of the cluster to get details for
 
 Example query: "Tell me more about the cluster called extrasmall-chamomile-duck."
+
+### SSH Tools
+
+#### ssh-connect
+
+Establishes an SSH connection to a remote server.
+
+Parameters:
+
+- `host`: Hostname or IP address of the remote server
+- `username`: SSH username for authentication
+- `password`: (Optional) SSH password for authentication
+- `private_key_path`: (Optional) Path to private key file
+- `port`: (Optional) SSH port number (default: 22)
+
+Example query: "Connect to my GPU instance at 192.168.1.100 as user admin."
+
+#### remote-shell
+
+Executes a command on the connected remote server.
+
+Parameters:
+
+- `command`: Command to execute on the remote server
+
+Example query: "Run 'nvidia-smi' on the connected server."
+
+#### ssh-status
+
+Checks the current SSH connection status.
+
+Example query: "What's the status of my SSH connection?"
+
+#### ssh-disconnect
+
+Closes the active SSH connection.
+
+Example query: "Disconnect from the SSH server."
 
 ## Security Notes
 

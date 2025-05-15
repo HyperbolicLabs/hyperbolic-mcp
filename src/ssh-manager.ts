@@ -1,12 +1,12 @@
 import * as fs from "fs";
-import { NodeSSH } from "node-ssh";
+import { Client } from "ssh2";
 
 /**
  * Singleton class to manage SSH connections
  */
 class SSHManager {
   private static instance: SSHManager;
-  private sshClient: NodeSSH | null = null;
+  private sshClient: Client | null = null;
   private connected = false;
   private host: string | null = null;
   private username: string | null = null;
@@ -30,16 +30,7 @@ class SSHManager {
    * Check if there's an active SSH connection
    */
   public isConnected(): boolean {
-    if (this.sshClient && this.connected) {
-      try {
-        // Test the connection
-        this.sshClient.execCommand("echo 1");
-        return true;
-      } catch {
-        this.connected = false;
-      }
-    }
-    return false;
+    return this.connected && this.sshClient !== null;
   }
 
   /**
@@ -49,20 +40,22 @@ class SSHManager {
    * @param password Optional SSH password for authentication
    * @param privateKeyPath Optional path to private key file
    * @param port SSH port number (default: 22)
+   * @param timeout Connection timeout in milliseconds (default: 10000)
    */
   public async connect(
     host: string,
     username: string,
     password?: string,
     privateKeyPath?: string,
-    port: number = 22
+    port: number = 22,
+    timeout: number = 10000
   ): Promise<string> {
     try {
       // Close existing connection if any
       await this.disconnect();
 
       // Initialize new client
-      this.sshClient = new NodeSSH();
+      this.sshClient = new Client();
 
       // Get default key path from environment
       const defaultKeyPath =
@@ -77,6 +70,8 @@ class SSHManager {
         host,
         port,
         username,
+        readyTimeout: timeout,
+        debug: (message: string) => console.log(`SSH Debug: ${message}`),
       };
 
       if (password) {
@@ -89,19 +84,60 @@ class SSHManager {
           return `SSH Key Error: Key file not found at ${expandedKeyPath}`;
         }
 
-        connectOptions.privateKey = fs.readFileSync(expandedKeyPath, "utf8");
+        try {
+          connectOptions.privateKey = fs.readFileSync(expandedKeyPath);
+        } catch (error) {
+          return `SSH Key Error: Failed to read key file ${expandedKeyPath}: ${error}`;
+        }
       }
 
-      await this.sshClient.connect(connectOptions);
-      this.connected = true;
-      this.host = host;
-      this.username = username;
-      return `Successfully connected to ${host} as ${username}`;
+      console.log(`Attempting to connect to ${host}:${port} as ${username}`);
+
+      return new Promise<string>((resolve, reject) => {
+        if (!this.sshClient) {
+          reject("SSH client not initialized");
+          return;
+        }
+
+        // Set a connection timeout
+        const timeoutId = setTimeout(() => {
+          if (this.sshClient && !this.connected) {
+            this.sshClient.end();
+            reject(
+              `SSH Connection Error: Connection timeout after ${timeout}ms`
+            );
+          }
+        }, timeout);
+
+        this.sshClient
+          .on("ready", () => {
+            clearTimeout(timeoutId);
+            this.connected = true;
+            this.host = host;
+            this.username = username;
+            console.log(`SSH connection established to ${host}`);
+            resolve(`Successfully connected to ${host} as ${username}`);
+          })
+          .on("error", (err) => {
+            clearTimeout(timeoutId);
+            this.connected = false;
+            const errorMessage = err
+              ? err.message || String(err)
+              : "Unknown error";
+            console.error(`SSH connection error: ${errorMessage}`);
+            reject(`SSH Connection Error: ${errorMessage}`);
+          })
+          .connect(connectOptions);
+      });
     } catch (e) {
       this.connected = false;
-      return `SSH Connection Error: ${
-        e instanceof Error ? e.message : String(e)
-      }`;
+      const errorMessage = e
+        ? e instanceof Error
+          ? e.message
+          : String(e)
+        : "Unknown error";
+      console.error(`SSH connection exception: ${errorMessage}`);
+      return `SSH Connection Error: ${errorMessage}`;
     }
   }
 
@@ -114,18 +150,53 @@ class SSHManager {
       return "Error: No active SSH connection. Please connect first.";
     }
 
-    try {
-      const result = await this.sshClient.execCommand(command);
+    console.log(`Executing command: ${command}`);
 
-      if (result.stderr) {
-        return `Error: ${result.stderr}\nOutput: ${result.stdout}`;
+    return new Promise<string>((resolve) => {
+      try {
+        this.sshClient!.exec(command, (err, stream) => {
+          if (err) {
+            this.connected = false;
+            const errorMessage = err.message || String(err);
+            console.error(`SSH command error: ${errorMessage}`);
+            resolve(`SSH Command Error: ${errorMessage}`);
+            return;
+          }
+
+          let stdout = "";
+          let stderr = "";
+
+          stream
+            .on("close", (code: number) => {
+              console.log(`Command completed with exit code: ${code}`);
+              if (stderr) {
+                resolve(`Error: ${stderr}\nOutput: ${stdout}`);
+              } else {
+                resolve(stdout);
+              }
+            })
+            .on("data", (data: Buffer) => {
+              const chunk = data.toString();
+              stdout += chunk;
+              if (chunk.trim()) {
+                console.log(`SSH stdout: ${chunk.trim()}`);
+              }
+            })
+            .stderr.on("data", (data: Buffer) => {
+              const chunk = data.toString();
+              stderr += chunk;
+              if (chunk.trim()) {
+                console.error(`SSH stderr: ${chunk.trim()}`);
+              }
+            });
+        });
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        console.error(`SSH execute exception: ${errorMessage}`);
+        resolve(`SSH Execution Error: ${errorMessage}`);
       }
-
-      return result.stdout;
-    } catch (e) {
-      this.connected = false;
-      return `SSH Command Error: ${e instanceof Error ? e.message : String(e)}`;
-    }
+    });
   }
 
   /**
@@ -133,11 +204,7 @@ class SSHManager {
    */
   public async disconnect(): Promise<void> {
     if (this.sshClient) {
-      try {
-        this.sshClient.dispose();
-      } catch {
-        // Ignore errors during disconnect
-      }
+      this.sshClient.end();
     }
     this.connected = false;
     this.host = null;

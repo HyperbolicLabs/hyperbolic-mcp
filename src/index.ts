@@ -493,6 +493,9 @@ server.tool(
   },
   async ({ host, username, password, private_key_path, port }) => {
     try {
+      console.log(
+        `Attempting SSH connection to ${host}:${port} as ${username}`
+      );
       const result = await sshManager.connect(
         host,
         username,
@@ -513,11 +516,18 @@ server.tool(
           result.startsWith("SSH Key Error"),
       };
     } catch (error) {
+      console.error("SSH connection failed with error:", error);
+      const errorMessage = error
+        ? error instanceof Error
+          ? error.message || "Unknown error"
+          : String(error)
+        : "Unknown error";
+
       return {
         content: [
           {
             type: "text",
-            text: `Error connecting to SSH: ${(error as Error).message}`,
+            text: `Error connecting to SSH: ${errorMessage}`,
           },
         ],
         isError: true,
@@ -546,6 +556,7 @@ server.tool(
         };
       }
 
+      console.log(`Executing remote command: ${command}`);
       const result = await sshManager.execute(command);
 
       return {
@@ -560,11 +571,18 @@ server.tool(
           result.startsWith("SSH Command Error:"),
       };
     } catch (error) {
+      console.error("SSH command execution error:", error);
+      const errorMessage = error
+        ? error instanceof Error
+          ? error.message || "Unknown error"
+          : String(error)
+        : "Unknown error";
+
       return {
         content: [
           {
             type: "text",
-            text: `Error executing command: ${(error as Error).message}`,
+            text: `Error executing command: ${errorMessage}`,
           },
         ],
         isError: true,
@@ -587,11 +605,18 @@ server.tool("ssh-status", {}, async () => {
       ],
     };
   } catch (error) {
+    console.error("SSH status error:", error);
+    const errorMessage = error
+      ? error instanceof Error
+        ? error.message || "Unknown error"
+        : String(error)
+      : "Unknown error";
+
     return {
       content: [
         {
           type: "text",
-          text: `Error getting SSH status: ${(error as Error).message}`,
+          text: `Error getting SSH status: ${errorMessage}`,
         },
       ],
       isError: true,
@@ -624,11 +649,161 @@ server.tool("ssh-disconnect", {}, async () => {
       ],
     };
   } catch (error) {
+    console.error("SSH disconnect error:", error);
+    const errorMessage = error
+      ? error instanceof Error
+        ? error.message || "Unknown error"
+        : String(error)
+      : "Unknown error";
+
     return {
       content: [
         {
           type: "text",
-          text: `Error disconnecting SSH: ${(error as Error).message}`,
+          text: `Error disconnecting SSH: ${errorMessage}`,
+        },
+      ],
+      isError: true,
+    };
+  }
+});
+
+// Register tool for listing user's active instances
+server.tool("list-user-instances", {}, async () => {
+  try {
+    const data = await makeHyperbolicRequest("/marketplace/instances");
+
+    if (!data.instances || !Array.isArray(data.instances)) {
+      throw new Error("Invalid response format from Hyperbolic API");
+    }
+
+    if (data.instances.length === 0) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "You don't have any active instances on Hyperbolic.",
+          },
+        ],
+      };
+    }
+
+    // Format the instances in a readable way
+    const tableHeader = `| Instance ID | Status | GPU Model | GPU Count | Created | Price/Hour | SSH Command |\n| ----------- | ------ | --------- | --------- | ------- | ---------- | ----------- |`;
+
+    const tableRows = data.instances.map((instance: any) => {
+      const created = instance.created
+        ? new Date(instance.created).toLocaleString()
+        : "Unknown";
+
+      const gpuModel =
+        instance.instance?.hardware?.gpus?.[0]?.model || "Unknown";
+      const gpuCount = instance.instance?.gpu_count || 0;
+      const price = instance.instance?.pricing?.price?.amount || "Unknown";
+      const status = instance.instance?.status || "Unknown";
+
+      return `| ${
+        instance.id || "N/A"
+      } | ${status} | ${gpuModel} | ${gpuCount} | ${created} | $${price} | \`${
+        instance.sshCommand || "N/A"
+      }\` |`;
+    });
+
+    const tableOutput = [tableHeader, ...tableRows].join("\n");
+
+    const detailedInfo = data.instances
+      .map((instance: any, index: number) => {
+        const created = instance.created
+          ? new Date(instance.created).toLocaleString()
+          : "Unknown";
+
+        const start = instance.start
+          ? new Date(instance.start).toLocaleString()
+          : "Not started";
+
+        const end = instance.end
+          ? new Date(instance.end).toLocaleString()
+          : "Ongoing";
+
+        // Get hardware details
+        const cpuInfo = instance.instance?.hardware?.cpus?.[0]
+          ? `${instance.instance.hardware.cpus[0].model || "Unknown"} (${
+              instance.instance.hardware.cpus[0].virtual_cores || 0
+            } virtual cores)`
+          : "CPU information not available";
+
+        const ramInfo = instance.instance?.hardware?.ram?.[0]
+          ? `${formatRAM(instance.instance.hardware.ram[0].capacity || 0)}`
+          : "RAM information not available";
+
+        const storageInfo = instance.instance?.hardware?.storage?.[0]
+          ? `${instance.instance.hardware.storage[0].capacity || 0} GB`
+          : "Storage information not available";
+
+        // GPU details
+        const gpuDetails = instance.instance?.hardware?.gpus
+          ? instance.instance.hardware.gpus
+              .map(
+                (gpu: any, gpuIndex: number) =>
+                  `  - GPU ${gpuIndex + 1}: ${
+                    gpu.model || "Unknown"
+                  }, VRAM: ${formatRAM(gpu.ram || 0)}`
+              )
+              .join("\n")
+          : "No GPU details available";
+
+        const pricing = instance.instance?.pricing?.price
+          ? `$${instance.instance.pricing.price.amount || 0} per ${
+              instance.instance.pricing.price.period || "hour"
+            }`
+          : "Pricing information not available";
+
+        return `### Instance ${index + 1}: ${instance.id}
+- Status: ${instance.instance?.status || "Unknown"}
+- Created: ${created}
+- Started: ${start}
+- End: ${end}
+- Owner ID: ${instance.instance?.owner || "Unknown"}
+
+#### Hardware:
+- CPU: ${cpuInfo}
+- RAM: ${ramInfo}
+- Storage: ${storageInfo}
+- GPUs Allocated: ${instance.instance?.gpu_count || 0} (of ${
+          instance.instance?.gpus_total || 0
+        } total)
+
+#### GPU Details:
+${gpuDetails}
+
+#### Pricing:
+- ${pricing}
+
+#### Connection:
+- SSH Command: \`${instance.sshCommand || "N/A"}\`
+- Port Mappings: ${
+          instance.portMappings?.length
+            ? JSON.stringify(instance.portMappings)
+            : "None"
+        }
+`;
+      })
+      .join("\n\n");
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `# Your Active Instances on Hyperbolic\n\n${tableOutput}\n\n## Detailed Information\n\n${detailedInfo}`,
+        },
+      ],
+    };
+  } catch (error) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Error listing your instances: ${(error as Error).message}`,
         },
       ],
       isError: true,

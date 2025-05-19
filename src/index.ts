@@ -124,7 +124,7 @@ server.tool(
             cpu_cores: instance.hardware?.cpus?.[0]?.virtual_cores || "Unknown",
             ram_gb: totalRAM,
             storage_gb: totalStorage,
-            price_per_hour: `${pricePerHour}`,
+            price_per_hour: `$${(pricePerHour / 100).toFixed(2)}`,
             reserved: instance.reserved ? "Yes" : "No",
             region: instance.location?.region || "Unknown",
           };
@@ -312,6 +312,88 @@ Your GPU instance is now being provisioned and will be ready shortly. You can ch
           {
             type: "text",
             text: `Error renting GPU instance: ${(error as Error).message}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Register tool for terminating a GPU instance
+server.tool(
+  "terminate-gpu-instance",
+  {
+    instance_id: z
+      .string()
+      .describe("The ID of the instance to terminate"),
+  },
+  async ({ instance_id }) => {
+    try {
+      // First, verify that the instance exists and belongs to the user
+      const instancesData = await makeHyperbolicRequest("/marketplace/instances");
+
+      if (!instancesData.instances || !Array.isArray(instancesData.instances)) {
+        throw new Error("Invalid response format from Hyperbolic API");
+      }
+
+      // Find the specified instance
+      const instance = instancesData.instances.find(
+        (i: any) => i.id === instance_id
+      );
+
+      if (!instance) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error: Instance with ID "${instance_id}" was not found. Please check the ID and try again.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Proceed with termination
+      const requestBody = {
+        id: instance_id,
+      };
+
+      const data = await makeHyperbolicRequest(
+        "/marketplace/instances/terminate",
+        "POST",
+        requestBody
+      );
+
+      // Format the response in a more readable way
+      const formattedResponse = `# GPU Instance Successfully Terminated!
+
+## Termination Details
+- Instance ID: ${instance_id}
+- Status: Terminated
+
+## Instance Information
+- GPU Model: ${instance.instance?.hardware?.gpus?.[0]?.model || "Unknown"}
+- GPU Count: ${instance.instance?.gpu_count || "Unknown"}
+- Created: ${instance.created ? new Date(instance.created).toLocaleString() : "Unknown"}
+- Terminated: ${new Date().toLocaleString()}
+
+The instance has been terminated and all associated resources have been released.`;
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: formattedResponse,
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error terminating GPU instance: ${(error as Error).message}`,
           },
         ],
         isError: true,

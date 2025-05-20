@@ -9,6 +9,7 @@ This MCP server provides an interface to Hyperbolic's decentralized GPU network,
 - Node.js 16 or higher
 - npm or yarn
 - A Hyperbolic API token
+- (Optional) SSH private key for connecting to GPU instances
 
 ### Installation
 
@@ -16,7 +17,7 @@ This MCP server provides an interface to Hyperbolic's decentralized GPU network,
 
    ```bash
    git clone <your-repo-url>
-   cd hyperbolic-mcp-server
+   cd hyperbolic-mcp
    ```
 
 2. Install dependencies:
@@ -25,15 +26,7 @@ This MCP server provides an interface to Hyperbolic's decentralized GPU network,
    npm install
    ```
 
-3. Create a `.env` file with your Hyperbolic API token:
-
-   ```bash
-   cp .env.example .env
-   ```
-
-   Edit the `.env` file and replace the placeholder token with your actual Hyperbolic API token.
-
-4. Build the TypeScript files:
+3. Build the TypeScript files:
    ```bash
    npm run build
    ```
@@ -59,7 +52,8 @@ npm start
       "command": "node",
       "args": ["/path/to/hyperbolic-mcp-server/build/index.js"],
       "env": {
-        "HYPERBOLIC_API_TOKEN": "your-hyperbolic-api-token"
+        "HYPERBOLIC_API_TOKEN": "your-hyperbolic-api-token",
+        "SSH_PRIVATE_KEY_PATH": "/path/to/your/privatekey" 
       }
     }
   }
@@ -69,6 +63,8 @@ npm start
 2. Restart Claude for Desktop.
 
 3. Start a new conversation and interact with the server.
+
+Note: You can provide environment variables either through the Claude Desktop config as shown above, or by creating a `.env` file in the project root. The `.env` file is only needed if you're not providing the variables through the config.
 
 ## Available Tools
 
@@ -93,6 +89,22 @@ Parameters:
 - `gpu_count`: Number of GPUs to rent
 
 Example query: "I want to rent 4 GPUs from the extrasmall-chamomile-duck cluster."
+
+#### terminate-gpu-instance
+
+Terminates a GPU instance that you have rented.
+
+Parameters:
+
+- `instance_id`: The ID of the instance to terminate
+
+Example query: "Terminate my GPU instance with ID abc123."
+
+#### list-user-instances
+
+Lists all active GPU instances that you have rented.
+
+Example query: "Show me all my active GPU instances."
 
 #### get-cluster-details
 
@@ -144,10 +156,11 @@ Example query: "Disconnect from the SSH server."
 
 ## Security Notes
 
-- This server requires your Hyperbolic API token stored in the `.env` file
-- The token grants access to your Hyperbolic account, so keep it secure
-- The server only runs locally and doesn't expose your token externally
+- This server requires your Hyperbolic API token and optionally an SSH private key
+- These credentials can be provided either through the Claude Desktop config or a `.env` file
+- The server only runs locally and doesn't expose your credentials externally
 - Commands to rent GPUs will incur charges on your Hyperbolic account
+- The SSH private key must not be password protected as the server cannot handle password-protected keys
 
 ## Troubleshooting
 
@@ -157,6 +170,7 @@ If you encounter issues:
 2. Ensure you have sufficient credits on your Hyperbolic account
 3. Check the server logs for error messages
 4. Verify your network connection to the Hyperbolic API
+5. If using SSH, verify that your private key path is correct and the key has the right permissions.
 
 ## License
 

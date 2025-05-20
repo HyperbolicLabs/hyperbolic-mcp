@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import dotenv from "dotenv";
 import { sshManager } from "./ssh-manager.js";
+import { wait } from "./utils.js";
 
 // Load environment variables
 dotenv.config();
@@ -124,7 +125,7 @@ server.tool(
             cpu_cores: instance.hardware?.cpus?.[0]?.virtual_cores || "Unknown",
             ram_gb: totalRAM,
             storage_gb: totalStorage,
-            price_per_hour: `${pricePerHour}`,
+            price_per_hour: `$${(pricePerHour / 100).toFixed(2)}`,
             reserved: instance.reserved ? "Yes" : "No",
             region: instance.location?.region || "Unknown",
           };
@@ -137,39 +138,64 @@ server.tool(
           content: [
             {
               type: "text",
-              text: "No available GPU instances found. All instances are currently reserved or in use.",
+              text: JSON.stringify({
+                status: "success",
+                available_gpus: [],
+                message: "No available GPU instances found. All instances are currently reserved or in use."
+              }, null, 2)
             },
           ],
         };
       }
 
-      // Create a more human-readable table format
-      const tableHeader = `| Cluster Name | Node Name | GPU Model | Available/Total GPUs | VRAM (GB) | CPU Cores | RAM (GB) | Storage (GB) | Price/Hour | Region |\n| ----------- | --------- | --------- | ------------------ | --------- | --------- | ------- | ----------- | ---------- | ------ |`;
-
-      const tableRows = availableGPUs.map(
-        (gpu: {
-          cluster_name: any;
-          node_name: any;
-          gpu_model: any;
-          available_gpus: any;
-          gpu_count: any;
-          gpu_vram_gb: any;
-          cpu_cores: any;
-          ram_gb: any;
-          storage_gb: any;
-          price_per_hour: any;
-          region: any;
-        }) =>
-          `| ${gpu.cluster_name} | ${gpu.node_name} | ${gpu.gpu_model} | ${gpu.available_gpus}/${gpu.gpu_count} | ${gpu.gpu_vram_gb} | ${gpu.cpu_cores} | ${gpu.ram_gb} | ${gpu.storage_gb} | ${gpu.price_per_hour} | ${gpu.region} |`
-      );
-
-      const tableOutput = [tableHeader, ...tableRows].join("\n");
+      // Format the response as JSON
+      const jsonResponse = {
+        status: "success",
+        available_gpus: availableGPUs.map((gpu: {
+          cluster_name: string;
+          node_name: string;
+          gpu_model: string;
+          available_gpus: number;
+          gpu_count: number;
+          gpu_vram_gb: number | string;
+          cpu_cores: number | string;
+          ram_gb: number;
+          storage_gb: number;
+          price_per_hour: string;
+          region: string;
+          reserved: boolean;
+        }) => ({
+          cluster_name: gpu.cluster_name,
+          node_name: gpu.node_name,
+          gpu_model: gpu.gpu_model,
+          gpu_count: {
+            available: gpu.available_gpus,
+            total: gpu.gpu_count
+          },
+          specifications: {
+            vram_gb: gpu.gpu_vram_gb,
+            cpu_cores: gpu.cpu_cores,
+            ram_gb: gpu.ram_gb,
+            storage_gb: gpu.storage_gb
+          },
+          pricing: {
+            per_hour: gpu.price_per_hour
+          },
+          region: gpu.region,
+          is_reserved: gpu.reserved
+        })),
+        total_available_instances: availableGPUs.length,
+        rental_instructions: {
+          tool: "rent-gpu-instance",
+          required_parameters: ["cluster_name", "node_name", "gpu_count"]
+        }
+      };
 
       return {
         content: [
           {
             type: "text",
-            text: `# Available GPU Instances on Hyperbolic\n\n${tableOutput}\n\nTo rent an instance, use the \`rent-gpu-instance\` tool with the cluster_name, node_name, and gpu_count parameters.`,
+            text: JSON.stringify(jsonResponse, null, 2)
           },
         ],
       };
@@ -178,7 +204,10 @@ server.tool(
         content: [
           {
             type: "text",
-            text: `Error listing available GPUs: ${(error as Error).message}`,
+            text: JSON.stringify({
+              status: "error",
+              error: (error as Error).message
+            }, null, 2)
           },
         ],
         isError: true,
@@ -263,40 +292,127 @@ server.tool(
         requestBody
       );
 
+      // Wait for 60 seconds to allow the instance to start up
+      const waitMessage = "Waiting 60 seconds for the instance to start up...";
+      console.error(waitMessage);
+      await wait(60000);
+      const completeMessage = "Wait complete. Instance should be ready for SSH connection.";
+      console.error(completeMessage);
+
+      // Format the response as JSON
+      const jsonResponse = {
+        status: "success",
+        rental_details: {
+          cluster_name,
+          node_name,
+          gpus_rented: gpu_count,
+          instance_id: data.instance_id || null,
+          status: data.status || "created"
+        },
+        hardware_details: {
+          gpu_model: instance.hardware?.gpus?.[0]?.model || null,
+          gpu_vram: instance.hardware?.gpus?.[0]?.ram ? formatRAM(instance.hardware.gpus[0].ram) : null,
+          cpu: {
+            model: instance.hardware?.cpus?.[0]?.model || null,
+            virtual_cores: instance.hardware?.cpus?.[0]?.virtual_cores || null
+          }
+        },
+        pricing: {
+          amount: instance.pricing?.price?.amount || null,
+          period: instance.pricing?.price?.period || "hour"
+        },
+        connection_info: data.connection_info || null,
+        startup_status: {
+          wait_message: waitMessage,
+          complete_message: completeMessage,
+          wait_duration_seconds: 60
+        }
+      };
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(jsonResponse, null, 2)
+          },
+        ],
+      };
+    } catch (error) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "error",
+              error: (error as Error).message
+            }, null, 2)
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+);
+
+// Register tool for terminating a GPU instance
+server.tool(
+  "terminate-gpu-instance",
+  {
+    instance_id: z
+      .string()
+      .describe("The ID of the instance to terminate"),
+  },
+  async ({ instance_id }) => {
+    try {
+      // First, verify that the instance exists and belongs to the user
+      const instancesData = await makeHyperbolicRequest("/marketplace/instances");
+
+      if (!instancesData.instances || !Array.isArray(instancesData.instances)) {
+        throw new Error("Invalid response format from Hyperbolic API");
+      }
+
+      // Find the specified instance
+      const instance = instancesData.instances.find(
+        (i: any) => i.id === instance_id
+      );
+
+      if (!instance) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error: Instance with ID "${instance_id}" was not found. Please check the ID and try again.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Proceed with termination
+      const requestBody = {
+        id: instance_id,
+      };
+
+      const data = await makeHyperbolicRequest(
+        "/marketplace/instances/terminate",
+        "POST",
+        requestBody
+      );
+
       // Format the response in a more readable way
-      const formattedResponse = `# GPU Instance Successfully Rented!
+      const formattedResponse = `# GPU Instance Successfully Terminated!
 
-## Rental Details
-- Cluster Name: ${cluster_name}
-- Node Name: ${node_name}
-- GPUs Rented: ${gpu_count}
-- Instance ID: ${data.instance_id || "N/A"}
-- Status: ${data.status || "Created"}
+## Termination Details
+- Instance ID: ${instance_id}
+- Status: Terminated
 
-## Hardware Details
-- GPU Model: ${instance.hardware?.gpus?.[0]?.model || "Unknown"}
-- GPU VRAM: ${
-        instance.hardware?.gpus?.[0]?.ram
-          ? formatRAM(instance.hardware.gpus[0].ram)
-          : "Unknown"
-      }
-- CPU: ${instance.hardware?.cpus?.[0]?.model || "Unknown"} (${
-        instance.hardware?.cpus?.[0]?.virtual_cores || "Unknown"
-      } virtual cores)
+## Instance Information
+- GPU Model: ${instance.instance?.hardware?.gpus?.[0]?.model || "Unknown"}
+- GPU Count: ${instance.instance?.gpu_count || "Unknown"}
+- Created: ${instance.created ? new Date(instance.created).toLocaleString() : "Unknown"}
+- Terminated: ${new Date().toLocaleString()}
 
-## Pricing
-- Cost: ${instance.pricing?.price?.amount || "Unknown"} per ${
-        instance.pricing?.price?.period || "hour"
-      }
-
-## Connection Information
-${
-  data.connection_info
-    ? JSON.stringify(data.connection_info, null, 2)
-    : "Connection information will be available shortly."
-}
-
-Your GPU instance is now being provisioned and will be ready shortly. You can check the status of your instance through the Hyperbolic dashboard.`;
+The instance has been terminated and all associated resources have been released.`;
 
       return {
         content: [
@@ -311,7 +427,7 @@ Your GPU instance is now being provisioned and will be ready shortly. You can ch
         content: [
           {
             type: "text",
-            text: `Error renting GPU instance: ${(error as Error).message}`,
+            text: `Error terminating GPU instance: ${(error as Error).message}`,
           },
         ],
         isError: true,
@@ -392,64 +508,62 @@ server.tool(
       const availabilityStatus =
         availableGPUCount > 0 ? "Available" : "Fully Reserved";
 
-      // Format the existing instances running on this node
-      const existingInstances =
-        instance.instances && instance.instances.length > 0
-          ? instance.instances
-              .map((inst: any) => {
-                const gpuCount =
-                  inst.hardware?.filter((h: any) => h.gpu).length || 0;
-                const storage =
-                  inst.hardware?.find((h: any) => h.storage)?.storage
-                    ?.capacity || 0;
-                return `- Instance ID: ${inst.id}, Status: ${inst.status}, GPUs: ${gpuCount}, Storage: ${storage} GB`;
-              })
-              .join("\n")
-          : "No running instances";
-
-      const detailedInfo = `# Cluster: ${cluster_name}
-
-## Basic Information
-- Node Name: ${instance.id || "Unknown"}
-- Status: ${instance.status || "Unknown"} (${availabilityStatus})
-- Region: ${instance.location?.region || "Unknown"}
-- Reserved: ${instance.reserved ? "Yes" : "No"}
-- Has Persistent Storage: ${instance.has_persistent_storage ? "Yes" : "No"}
-
-## Hardware Specifications
-- CPU: ${cpuInfo}
-- RAM: ${ramInfo}
-- Storage: ${storageInfo}
-- Total GPUs: ${instance.gpus_total || 0}
-- Available GPUs: ${availableGPUCount}
-- Reserved GPUs: ${instance.gpus_reserved || 0}
-
-## GPU Details
-${gpuInfo}
-
-## Pricing
-- ${pricing}
-
-## Running Instances
-${existingInstances}
-
-To rent GPUs from this cluster, use the \`rent-gpu-instance\` tool with the following parameters:
-\`\`\`
-{
-  "cluster_name": "${cluster_name}",
-  "node_name": "${instance.id || ""}",
-  "gpu_count": ${Math.min(
-    availableGPUCount,
-    1
-  )} // Specify how many GPUs you want to rent (up to ${availableGPUCount} available)
-}
-\`\`\``;
+      // Format the response as JSON
+      const jsonResponse = {
+        status: "success",
+        cluster_info: {
+          name: cluster_name,
+          node_name: instance.id || null,
+          status: instance.status || null,
+          availability_status: availabilityStatus,
+          region: instance.location?.region || null,
+          is_reserved: instance.reserved || false,
+          has_persistent_storage: instance.has_persistent_storage || false
+        },
+        hardware_specs: {
+          cpu: {
+            model: instance.hardware?.cpus?.[0]?.model || null,
+            virtual_cores: instance.hardware?.cpus?.[0]?.virtual_cores || null
+          },
+          ram: instance.hardware?.ram?.[0]?.capacity ? formatRAM(instance.hardware.ram[0].capacity) : null,
+          storage: instance.hardware?.storage?.[0]?.capacity ? `${instance.hardware.storage[0].capacity} GB` : null,
+          gpus: {
+            total: instance.gpus_total || 0,
+            available: availableGPUCount,
+            reserved: instance.gpus_reserved || 0,
+            details: instance.hardware?.gpus?.map((gpu: any, index: number) => ({
+              index: index + 1,
+              model: gpu.model || null,
+              vram: gpu.ram ? formatRAM(gpu.ram) : null
+            })) || []
+          }
+        },
+        pricing: {
+          amount: instance.pricing?.price?.amount || null,
+          period: instance.pricing?.price?.period || "hour"
+        },
+        running_instances: instance.instances?.map((inst: any) => ({
+          id: inst.id,
+          status: inst.status,
+          gpu_count: inst.hardware?.filter((h: any) => h.gpu).length || 0,
+          storage: inst.hardware?.find((h: any) => h.storage)?.storage?.capacity || 0
+        })) || [],
+        rental_instructions: {
+          tool: "rent-gpu-instance",
+          parameters: {
+            cluster_name: cluster_name,
+            node_name: instance.id || "",
+            gpu_count: Math.min(availableGPUCount, 1),
+            max_available: availableGPUCount
+          }
+        }
+      };
 
       return {
         content: [
           {
             type: "text",
-            text: detailedInfo,
+            text: JSON.stringify(jsonResponse, null, 2)
           },
         ],
       };
@@ -458,7 +572,10 @@ To rent GPUs from this cluster, use the \`rent-gpu-instance\` tool with the foll
         content: [
           {
             type: "text",
-            text: `Error getting cluster details: ${(error as Error).message}`,
+            text: JSON.stringify({
+              status: "error",
+              error: (error as Error).message
+            }, null, 2)
           },
         ],
         isError: true,
@@ -493,9 +610,9 @@ server.tool(
   },
   async ({ host, username, password, private_key_path, port }) => {
     try {
-      console.log(
-        `Attempting SSH connection to ${host}:${port} as ${username}`
-      );
+      // console.log(
+      //   `Attempting SSH connection to ${host}:${port} as ${username}`
+      // );
       const result = await sshManager.connect(
         host,
         username,
@@ -508,12 +625,13 @@ server.tool(
         content: [
           {
             type: "text",
-            text: result,
+            text: JSON.stringify({
+              status: result.startsWith("SSH Connection Error") || result.startsWith("SSH Key Error") ? "error" : "success",
+              message: result
+            }, null, 2)
           },
         ],
-        isError:
-          result.startsWith("SSH Connection Error") ||
-          result.startsWith("SSH Key Error"),
+        isError: result.startsWith("SSH Connection Error") || result.startsWith("SSH Key Error"),
       };
     } catch (error) {
       console.error("SSH connection failed with error:", error);
@@ -527,7 +645,10 @@ server.tool(
         content: [
           {
             type: "text",
-            text: `Error connecting to SSH: ${errorMessage}`,
+            text: JSON.stringify({
+              status: "error",
+              error: errorMessage
+            }, null, 2)
           },
         ],
         isError: true,
@@ -549,26 +670,31 @@ server.tool(
           content: [
             {
               type: "text",
-              text: "Error: No active SSH connection. Please connect first using the ssh-connect tool.",
+              text: JSON.stringify({
+                status: "error",
+                error: "No active SSH connection. Please connect first using the ssh-connect tool."
+              }, null, 2)
             },
           ],
           isError: true,
         };
       }
 
-      console.log(`Executing remote command: ${command}`);
+      // console.log(`Executing remote command: ${command}`);
       const result = await sshManager.execute(command);
 
       return {
         content: [
           {
             type: "text",
-            text: result || "(Command executed with no output)",
+            text: JSON.stringify({
+              status: result.startsWith("Error:") || result.startsWith("SSH Command Error:") ? "error" : "success",
+              command,
+              output: result || "(Command executed with no output)"
+            }, null, 2)
           },
         ],
-        isError:
-          result.startsWith("Error:") ||
-          result.startsWith("SSH Command Error:"),
+        isError: result.startsWith("Error:") || result.startsWith("SSH Command Error:"),
       };
     } catch (error) {
       console.error("SSH command execution error:", error);
@@ -582,7 +708,10 @@ server.tool(
         content: [
           {
             type: "text",
-            text: `Error executing command: ${errorMessage}`,
+            text: JSON.stringify({
+              status: "error",
+              error: errorMessage
+            }, null, 2)
           },
         ],
         isError: true,
@@ -600,7 +729,10 @@ server.tool("ssh-status", {}, async () => {
       content: [
         {
           type: "text",
-          text: `SSH Connection Status: ${status}`,
+          text: JSON.stringify({
+            status: "success",
+            connection_status: status
+          }, null, 2)
         },
       ],
     };
@@ -616,7 +748,10 @@ server.tool("ssh-status", {}, async () => {
       content: [
         {
           type: "text",
-          text: `Error getting SSH status: ${errorMessage}`,
+          text: JSON.stringify({
+            status: "error",
+            error: errorMessage
+          }, null, 2)
         },
       ],
       isError: true,
@@ -632,7 +767,10 @@ server.tool("ssh-disconnect", {}, async () => {
         content: [
           {
             type: "text",
-            text: "No active SSH connection to disconnect.",
+            text: JSON.stringify({
+              status: "success",
+              message: "No active SSH connection to disconnect."
+            }, null, 2)
           },
         ],
       };
@@ -644,7 +782,10 @@ server.tool("ssh-disconnect", {}, async () => {
       content: [
         {
           type: "text",
-          text: "SSH connection closed successfully.",
+          text: JSON.stringify({
+            status: "success",
+            message: "SSH connection closed successfully."
+          }, null, 2)
         },
       ],
     };
@@ -660,7 +801,10 @@ server.tool("ssh-disconnect", {}, async () => {
       content: [
         {
           type: "text",
-          text: `Error disconnecting SSH: ${errorMessage}`,
+          text: JSON.stringify({
+            status: "error",
+            error: errorMessage
+          }, null, 2)
         },
       ],
       isError: true,
@@ -682,119 +826,61 @@ server.tool("list-user-instances", {}, async () => {
         content: [
           {
             type: "text",
-            text: "You don't have any active instances on Hyperbolic.",
+            text: JSON.stringify({
+              status: "success",
+              instances: [],
+              message: "You don't have any active instances on Hyperbolic."
+            }, null, 2)
           },
         ],
       };
     }
 
-    // Format the instances in a readable way
-    const tableHeader = `| Instance ID | Status | GPU Model | GPU Count | Created | Price/Hour | SSH Command |\n| ----------- | ------ | --------- | --------- | ------- | ---------- | ----------- |`;
-
-    const tableRows = data.instances.map((instance: any) => {
-      const created = instance.created
-        ? new Date(instance.created).toLocaleString()
-        : "Unknown";
-
-      const gpuModel =
-        instance.instance?.hardware?.gpus?.[0]?.model || "Unknown";
-      const gpuCount = instance.instance?.gpu_count || 0;
-      const price = instance.instance?.pricing?.price?.amount || "Unknown";
-      const status = instance.instance?.status || "Unknown";
-
-      return `| ${
-        instance.id || "N/A"
-      } | ${status} | ${gpuModel} | ${gpuCount} | ${created} | $${price} | \`${
-        instance.sshCommand || "N/A"
-      }\` |`;
-    });
-
-    const tableOutput = [tableHeader, ...tableRows].join("\n");
-
-    const detailedInfo = data.instances
-      .map((instance: any, index: number) => {
-        const created = instance.created
-          ? new Date(instance.created).toLocaleString()
-          : "Unknown";
-
-        const start = instance.start
-          ? new Date(instance.start).toLocaleString()
-          : "Not started";
-
-        const end = instance.end
-          ? new Date(instance.end).toLocaleString()
-          : "Ongoing";
-
-        // Get hardware details
-        const cpuInfo = instance.instance?.hardware?.cpus?.[0]
-          ? `${instance.instance.hardware.cpus[0].model || "Unknown"} (${
-              instance.instance.hardware.cpus[0].virtual_cores || 0
-            } virtual cores)`
-          : "CPU information not available";
-
-        const ramInfo = instance.instance?.hardware?.ram?.[0]
-          ? `${formatRAM(instance.instance.hardware.ram[0].capacity || 0)}`
-          : "RAM information not available";
-
-        const storageInfo = instance.instance?.hardware?.storage?.[0]
-          ? `${instance.instance.hardware.storage[0].capacity || 0} GB`
-          : "Storage information not available";
-
-        // GPU details
-        const gpuDetails = instance.instance?.hardware?.gpus
-          ? instance.instance.hardware.gpus
-              .map(
-                (gpu: any, gpuIndex: number) =>
-                  `  - GPU ${gpuIndex + 1}: ${
-                    gpu.model || "Unknown"
-                  }, VRAM: ${formatRAM(gpu.ram || 0)}`
-              )
-              .join("\n")
-          : "No GPU details available";
-
-        const pricing = instance.instance?.pricing?.price
-          ? `$${instance.instance.pricing.price.amount || 0} per ${
-              instance.instance.pricing.price.period || "hour"
-            }`
-          : "Pricing information not available";
-
-        return `### Instance ${index + 1}: ${instance.id}
-- Status: ${instance.instance?.status || "Unknown"}
-- Created: ${created}
-- Started: ${start}
-- End: ${end}
-- Owner ID: ${instance.instance?.owner || "Unknown"}
-
-#### Hardware:
-- CPU: ${cpuInfo}
-- RAM: ${ramInfo}
-- Storage: ${storageInfo}
-- GPUs Allocated: ${instance.instance?.gpu_count || 0} (of ${
-          instance.instance?.gpus_total || 0
-        } total)
-
-#### GPU Details:
-${gpuDetails}
-
-#### Pricing:
-- ${pricing}
-
-#### Connection:
-- SSH Command: \`${instance.sshCommand || "N/A"}\`
-- Port Mappings: ${
-          instance.portMappings?.length
-            ? JSON.stringify(instance.portMappings)
-            : "None"
+    // Format the response as JSON
+    const jsonResponse = {
+      status: "success",
+      instances: data.instances.map((instance: any, index: number) => ({
+        id: instance.id || null,
+        basic_info: {
+          status: instance.instance?.status || null,
+          created: instance.created ? new Date(instance.created).toISOString() : null,
+          started: instance.start ? new Date(instance.start).toISOString() : null,
+          ended: instance.end ? new Date(instance.end).toISOString() : null,
+          owner_id: instance.instance?.owner || null
+        },
+        hardware: {
+          cpu: {
+            model: instance.instance?.hardware?.cpus?.[0]?.model || null,
+            virtual_cores: instance.instance?.hardware?.cpus?.[0]?.virtual_cores || null
+          },
+          ram: instance.instance?.hardware?.ram?.[0]?.capacity ? formatRAM(instance.instance.hardware.ram[0].capacity) : null,
+          storage: instance.instance?.hardware?.storage?.[0]?.capacity ? `${instance.instance.hardware.storage[0].capacity} GB` : null,
+          gpus: {
+            allocated: instance.instance?.gpu_count || 0,
+            total: instance.instance?.gpus_total || 0,
+            details: instance.instance?.hardware?.gpus?.map((gpu: any) => ({
+              model: gpu.model || null,
+              vram: gpu.ram ? formatRAM(gpu.ram) : null
+            })) || []
+          }
+        },
+        pricing: {
+          amount: instance.instance?.pricing?.price?.amount || null,
+          period: instance.instance?.pricing?.price?.period || "hour"
+        },
+        connection: {
+          ssh_command: instance.sshCommand || null,
+          port_mappings: instance.portMappings || []
         }
-`;
-      })
-      .join("\n\n");
+      })),
+      total_instances: data.instances.length
+    };
 
     return {
       content: [
         {
           type: "text",
-          text: `# Your Active Instances on Hyperbolic\n\n${tableOutput}\n\n## Detailed Information\n\n${detailedInfo}`,
+          text: JSON.stringify(jsonResponse, null, 2)
         },
       ],
     };
@@ -803,7 +889,10 @@ ${gpuDetails}
       content: [
         {
           type: "text",
-          text: `Error listing your instances: ${(error as Error).message}`,
+          text: JSON.stringify({
+            status: "error",
+            error: (error as Error).message
+          }, null, 2)
         },
       ],
       isError: true,

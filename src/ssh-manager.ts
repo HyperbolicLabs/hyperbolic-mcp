@@ -71,7 +71,6 @@ class SSHManager {
         port,
         username,
         readyTimeout: timeout,
-        debug: (message: string) => console.log(`SSH Debug: ${message}`),
       };
 
       if (password) {
@@ -91,7 +90,7 @@ class SSHManager {
         }
       }
 
-      console.log(`Attempting to connect to ${host}:${port} as ${username}`);
+      // console.error(`Attempting to connect to ${host}:${port} as ${username}`);
 
       return new Promise<string>((resolve, reject) => {
         if (!this.sshClient) {
@@ -115,7 +114,7 @@ class SSHManager {
             this.connected = true;
             this.host = host;
             this.username = username;
-            console.log(`SSH connection established to ${host}`);
+            console.error(`SSH connection established to ${host}`);
             resolve(`Successfully connected to ${host} as ${username}`);
           })
           .on("error", (err) => {
@@ -150,8 +149,6 @@ class SSHManager {
       return "Error: No active SSH connection. Please connect first.";
     }
 
-    console.log(`Executing command: ${command}`);
-
     return new Promise<string>((resolve) => {
       try {
         this.sshClient!.exec(command, (err, stream) => {
@@ -168,7 +165,7 @@ class SSHManager {
 
           stream
             .on("close", (code: number) => {
-              console.log(`Command completed with exit code: ${code}`);
+              console.error(`Command completed with exit code: ${code}`);
               if (stderr) {
                 resolve(`Error: ${stderr}\nOutput: ${stdout}`);
               } else {
@@ -179,7 +176,7 @@ class SSHManager {
               const chunk = data.toString();
               stdout += chunk;
               if (chunk.trim()) {
-                console.log(`SSH stdout: ${chunk.trim()}`);
+                console.error(`SSH stdout: ${chunk.trim()}`);
               }
             })
             .stderr.on("data", (data: Buffer) => {

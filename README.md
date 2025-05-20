@@ -17,7 +17,7 @@ This MCP server provides an interface to Hyperbolic's decentralized GPU network,
 
    ```bash
    git clone <your-repo-url>
-   cd hyperbolic-mcp-server
+   cd hyperbolic-mcp
    ```
 
 2. Install dependencies:

@@ -1,6 +1,6 @@
 # Hyperbolic GPU MCP Server
 
-This MCP server provides an interface to Hyperbolic's decentralized GPU network, allowing you to list available GPUs and rent instances.
+Interact with Hyperbolic's GPU cloud, enabling agents and LLMs to view and rent available GPUs, SSH into them, and run GPU-powered workloads for you.
 
 ## Setup
 

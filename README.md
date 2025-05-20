@@ -11,6 +11,34 @@ This MCP server provides an interface to Hyperbolic's decentralized GPU network,
 - A Hyperbolic API token
 - (Optional) SSH private key for connecting to GPU instances
 
+### Getting a Hyperbolic Account and API Token
+
+1. Register for a Hyperbolic account:
+   - Visit [https://app.hyperbolic.xyz/](https://app.hyperbolic.xyz/)
+   - Create an account or log in to your existing account
+   - Verify your email address
+
+2. Deposit funds into your account:
+   - Log in to your Hyperbolic application
+   - Navigate to the "Billing" tab
+   - Select how much you want to deposit (we suggest starting with $25)
+   - Click Pay Now
+   - Follow the instructions to add funds to your account
+   - Note that you will need sufficient funds to rent GPU instances
+
+3. Generate an API token:
+   - In your Hyperbolic dashboard, navigate to "Settings" 
+   - Navigate to the API Key section
+   - Copy the generated token and keep it secure
+   - You will use this key in your MCP server configuration environment variables
+
+4. Add your SSH public key:
+   - Generate an SSH key pair if you don't already have one
+   - In your Hyperbolic application, navigate to the "Settings" section
+   - Scroll down to the SSH Public Key section
+   - Paste your public key (usually from ~/.ssh/id_rsa.pub or similar)
+   - Click the save icon
+
 ### Installation
 
 1. Clone this repository:

@@ -53,7 +53,7 @@ npm start
       "args": ["/path/to/hyperbolic-mcp-server/build/index.js"],
       "env": {
         "HYPERBOLIC_API_TOKEN": "your-hyperbolic-api-token",
-        "SSH_PRIVATE_KEY_PATH": "/path/to/your/privatekey"
+        "SSH_PRIVATE_KEY_PATH": "/path/to/your/privatekey" 
       }
     }
   }
@@ -160,6 +160,7 @@ Example query: "Disconnect from the SSH server."
 - These credentials can be provided either through the Claude Desktop config or a `.env` file
 - The server only runs locally and doesn't expose your credentials externally
 - Commands to rent GPUs will incur charges on your Hyperbolic account
+- The SSH private key must not be password protected as the server cannot handle password-protected keys
 
 ## Troubleshooting
 
@@ -169,7 +170,7 @@ If you encounter issues:
 2. Ensure you have sufficient credits on your Hyperbolic account
 3. Check the server logs for error messages
 4. Verify your network connection to the Hyperbolic API
-5. If using SSH, verify that your private key path is correct and the key has the right permissions
+5. If using SSH, verify that your private key path is correct and the key has the right permissions.
 
 ## License
 

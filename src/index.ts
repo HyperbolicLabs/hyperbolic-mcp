@@ -293,9 +293,11 @@ server.tool(
       );
 
       // Wait for 60 seconds to allow the instance to start up
-      console.error("Waiting 60 seconds for the instance to start up...");
+      const waitMessage = "Waiting 60 seconds for the instance to start up...";
+      console.error(waitMessage);
       await wait(60000);
-      console.error("Wait complete. Instance should be ready for SSH connection.");
+      const completeMessage = "Wait complete. Instance should be ready for SSH connection.";
+      console.error(completeMessage);
 
       // Format the response as JSON
       const jsonResponse = {
@@ -320,7 +322,11 @@ server.tool(
           period: instance.pricing?.price?.period || "hour"
         },
         connection_info: data.connection_info || null,
-        note: "Waited 60 seconds for instance startup. The instance should now be ready for SSH connection."
+        startup_status: {
+          wait_message: waitMessage,
+          complete_message: completeMessage,
+          wait_duration_seconds: 60
+        }
       };
 
       return {

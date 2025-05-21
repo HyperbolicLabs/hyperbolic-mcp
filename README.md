@@ -2,6 +2,8 @@
 
 Interact with Hyperbolic's GPU cloud, enabling agents and LLMs to view and rent available GPUs, SSH into them, and run GPU-powered workloads for you.
 
+https://github.com/user-attachments/assets/814d0327-ce5e-4c1b-90bc-7f3712aa1c68
+
 ## Setup
 
 ### Prerequisites

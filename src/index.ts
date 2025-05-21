@@ -293,9 +293,9 @@ server.tool(
       );
 
       // Wait for 60 seconds to allow the instance to start up
-      const waitMessage = "Waiting 60 seconds for the instance to start up...";
+      const waitMessage = "Waiting 100 seconds for the instance to start up...";
       console.error(waitMessage);
-      await wait(60000);
+      await wait(100000);
       const completeMessage = "Wait complete. Instance should be ready for SSH connection.";
       console.error(completeMessage);
 
@@ -588,7 +588,7 @@ server.tool(
 server.tool(
   "ssh-connect",
   {
-    host: z.string().describe("Hostname or IP address of the remote server"),
+    host: z.string().describe("Hostname or IP address of the remote server. Always query the list-user-instances tool to get the host."),
     username: z.string().describe("SSH username for authentication"),
     password: z
       .string()

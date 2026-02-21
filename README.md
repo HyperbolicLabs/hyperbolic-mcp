@@ -4,6 +4,10 @@ Interact with Hyperbolic's GPU cloud, enabling agents and LLMs to view and rent 
 
 https://github.com/user-attachments/assets/814d0327-ce5e-4c1b-90bc-7f3712aa1c68
 
+<a href="https://glama.ai/mcp/servers/@HyperbolicLabs/hyperbolic-mcp">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/@HyperbolicLabs/hyperbolic-mcp/badge" alt="Hyperbolic GPU Server MCP server" />
+</a>
+
 ## Setup
 
 ### Prerequisites

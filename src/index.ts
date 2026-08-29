@@ -11,6 +11,9 @@ dotenv.config();
 // Hyperbolic API base URL
 const HYPERBOLIC_API_BASE = "https://api.hyperbolic.xyz/v1";
 
+/** Upper bound on a single Hyperbolic API call, in milliseconds. */
+const API_REQUEST_TIMEOUT_MS = 30_000;
+
 // Create MCP server instance
 const server = new McpServer({
   name: "hyperbolic-gpu-server",
@@ -21,7 +24,7 @@ const server = new McpServer({
 async function makeHyperbolicRequest(
   endpoint: string,
   method: string = "GET",
-  body?: any
+  body?: unknown
 ) {
   const token = process.env.HYPERBOLIC_API_TOKEN;
 
@@ -34,10 +37,16 @@ async function makeHyperbolicRequest(
     Authorization: `Bearer ${token}`,
   };
 
+  // `fetch` has no default timeout, so an unresponsive endpoint left the tool
+  // call — and the MCP client waiting on it — hanging indefinitely.
+  const abortController = new AbortController();
+  const timeoutId = setTimeout(() => abortController.abort(), API_REQUEST_TIMEOUT_MS);
+
   const requestOptions: RequestInit = {
     method,
     headers,
     body: body ? JSON.stringify(body) : undefined,
+    signal: abortController.signal,
   };
 
   try {
@@ -55,8 +64,20 @@ async function makeHyperbolicRequest(
 
     return await response.json();
   } catch (error) {
-    console.error("Error making Hyperbolic API request:", error);
+    if (error instanceof Error && error.name === "AbortError") {
+      // Report the timeout as such; the raw AbortError says nothing useful.
+      const timeoutError = new Error(
+        `Hyperbolic API request to ${endpoint} timed out after ${API_REQUEST_TIMEOUT_MS}ms`
+      );
+      console.error(timeoutError.message);
+      throw timeoutError;
+    }
+    // Only the endpoint is logged. The full request options were never logged
+    // here, and must not be: `headers.Authorization` carries the API token.
+    console.error(`Error making Hyperbolic API request to ${endpoint}:`, error);
     throw error;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -292,10 +313,15 @@ server.tool(
         requestBody
       );
 
-      // Wait for 60 seconds to allow the instance to start up
-      const waitMessage = "Waiting 100 seconds for the instance to start up...";
+      // Wait for the instance to start up before reporting it as ready.
+      // The comment said 60 seconds, the sleep was 100 seconds, and the JSON
+      // below reported `wait_duration_seconds: 60` — three different numbers for
+      // one delay, so a client computing a deadline from the response was wrong
+      // by 40 seconds. All three now derive from this constant.
+      const startupWaitSeconds = 100;
+      const waitMessage = `Waiting ${startupWaitSeconds} seconds for the instance to start up...`;
       console.error(waitMessage);
-      await wait(100000);
+      await wait(startupWaitSeconds * 1000);
       const completeMessage = "Wait complete. Instance should be ready for SSH connection.";
       console.error(completeMessage);
 
@@ -325,7 +351,7 @@ server.tool(
         startup_status: {
           wait_message: waitMessage,
           complete_message: completeMessage,
-          wait_duration_seconds: 60
+          wait_duration_seconds: startupWaitSeconds
         }
       };
 
@@ -626,12 +652,16 @@ server.tool(
           {
             type: "text",
             text: JSON.stringify({
-              status: result.startsWith("SSH Connection Error") || result.startsWith("SSH Key Error") ? "error" : "success",
-              message: result
+              // The status used to be derived by testing the message for an
+              // "SSH Connection Error"/"SSH Key Error" prefix. The manager now
+              // reports success explicitly, so a legitimate message that happens
+              // to contain those words can no longer flip the result.
+              status: result.ok ? "success" : "error",
+              message: result.message
             }, null, 2)
           },
         ],
-        isError: result.startsWith("SSH Connection Error") || result.startsWith("SSH Key Error"),
+        isError: !result.ok,
       };
     } catch (error) {
       console.error("SSH connection failed with error:", error);
@@ -688,13 +718,20 @@ server.tool(
           {
             type: "text",
             text: JSON.stringify({
-              status: result.startsWith("Error:") || result.startsWith("SSH Command Error:") ? "error" : "success",
+              // Success is now the remote exit status, not a prefix match on the
+              // output: `grep Error: app.log` exiting 0 is a success, and a
+              // command exiting 1 silently is a failure. Both were reported
+              // backwards before.
+              status: result.ok ? "success" : "error",
               command,
-              output: result || "(Command executed with no output)"
+              exit_code: result.exitCode,
+              output: result.stdout || "(Command executed with no output)",
+              ...(result.stderr ? { stderr: result.stderr } : {}),
+              ...(result.error ? { error: result.error } : {})
             }, null, 2)
           },
         ],
-        isError: result.startsWith("Error:") || result.startsWith("SSH Command Error:"),
+        isError: !result.ok,
       };
     } catch (error) {
       console.error("SSH command execution error:", error);
